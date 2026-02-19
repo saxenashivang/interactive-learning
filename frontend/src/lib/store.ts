@@ -92,7 +92,7 @@ export const useAppStore = create<AppState>((set) => ({
     // UI State
     sidebarOpen: true,
     setSidebarOpen: (sidebarOpen) => set({ sidebarOpen }),
-    selectedProvider: "gemini",
+    selectedProvider: "anthropic",
     setSelectedProvider: (selectedProvider) => set({ selectedProvider }),
     isLoading: false,
     setIsLoading: (isLoading) => set({ isLoading }),

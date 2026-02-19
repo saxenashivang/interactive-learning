@@ -100,44 +100,50 @@ async def send_message(
         if msg.role == MessageRole.HUMAN:
             lc_messages.append(HumanMessage(content=msg.content))
 
-    # Choose agent
-    if req.use_deep_research:
-        state = {
-            "messages": lc_messages,
-            "query": req.message,
-            "provider": req.provider,
-            "research_plan": [],
-            "search_results": [],
-            "synthesis": "",
-            "report_html_url": None,
-            "iteration": 0,
-            "max_iterations": 3,
-        }
-        result_state = await research_agent.ainvoke(state)
-    else:
-        state: ChatState = {
-            "messages": lc_messages,
-            "user_id": str(user.id),
-            "project_id": str(req.project_id),
-            "conversation_id": str(conversation.id),
-            "provider": req.provider,
-            "plan_tier": user.plan_tier.value,
-            "context_chunks": [],
-            "interactive_html_url": None,
-            "should_generate_interactive": False,
-            "uploaded_file_ids": [],
-        }
-        result_state = await chat_agent.ainvoke(state)
-
-    # Extract AI response
+    # Choose agent and run
     ai_content = ""
     interactive_url = None
 
-    if result_state.get("messages"):
-        last_msg = result_state["messages"][-1]
-        ai_content = last_msg.content if hasattr(last_msg, "content") else str(last_msg)
+    try:
+        if req.use_deep_research:
+            state = {
+                "messages": lc_messages,
+                "query": req.message,
+                "provider": req.provider,
+                "research_plan": [],
+                "search_results": [],
+                "synthesis": "",
+                "report_html_url": None,
+                "iteration": 0,
+                "max_iterations": 3,
+            }
+            result_state = await research_agent.ainvoke(state)
+        else:
+            state: ChatState = {
+                "messages": lc_messages,
+                "user_id": str(user.id),
+                "project_id": str(req.project_id),
+                "conversation_id": str(conversation.id),
+                "provider": req.provider,
+                "plan_tier": user.plan_tier.value,
+                "context_chunks": [],
+                "interactive_html_url": None,
+                "should_generate_interactive": False,
+                "uploaded_file_ids": [],
+            }
+            result_state = await chat_agent.ainvoke(state)
 
-    interactive_url = result_state.get("interactive_html_url") or result_state.get("report_html_url")
+        # Extract AI response
+        if result_state.get("messages"):
+            last_msg = result_state["messages"][-1]
+            ai_content = last_msg.content if hasattr(last_msg, "content") else str(last_msg)
+
+        interactive_url = result_state.get("interactive_html_url") or result_state.get("report_html_url")
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        ai_content = f"I encountered an error while processing your request: {str(e)}"
 
     # Save AI message
     ai_msg = Message(
