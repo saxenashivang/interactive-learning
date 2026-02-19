@@ -18,7 +18,7 @@ def get_chat_model(provider: str | None = None, **kwargs) -> BaseChatModel:
         A LangChain chat model instance.
     """
     provider = provider or settings.default_llm_provider
-    defaults = {"temperature": 0.7, "streaming": True}
+    defaults = {"temperature": 0.7, "streaming": True, "max_tokens": 8192}
     defaults.update(kwargs)
 
     if provider == "gemini":

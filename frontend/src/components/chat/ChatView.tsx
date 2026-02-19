@@ -16,6 +16,7 @@ export default function ChatView() {
     const [input, setInput] = useState("");
     const [useDeepResearch, setUseDeepResearch] = useState(false);
     const [isDragging, setIsDragging] = useState(false);
+    const [statusLog, setStatusLog] = useState<string[]>([]);
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -39,8 +40,18 @@ export default function ChatView() {
         const text = input.trim();
         setInput("");
         setIsLoading(true);
+        setStatusLog(["🔍 Analyzing your question..."]);
 
         addMessage({ id: `temp-${Date.now()}`, role: "human", content: text, has_interactive: false, created_at: new Date().toISOString() });
+
+        // Simulate progress logs while waiting
+        const logTimer = setTimeout(() => {
+            setStatusLog(prev => [...prev, "🧠 Generating response with interactive visuals..."]);
+        }, 3000);
+
+        const logTimer2 = setTimeout(() => {
+            setStatusLog(prev => [...prev, "📦 Building HTML card..."]);
+        }, 8000);
 
         try {
             const res = await sendMessage({
@@ -49,9 +60,20 @@ export default function ChatView() {
                 use_deep_research: useDeepResearch,
             });
 
+            clearTimeout(logTimer);
+            clearTimeout(logTimer2);
+
+            // Use status log from server if available
+            if (res.status_log?.length) {
+                setStatusLog(res.status_log);
+            }
+
             addMessage({
                 id: res.message_id, role: "ai", content: res.content,
-                has_interactive: res.has_interactive, interactive_html_url: res.interactive_html_url,
+                has_interactive: res.has_interactive,
+                interactive_html_url: res.interactive_html_url,
+                html_content: res.html_content,
+                status_log: res.status_log,
                 created_at: new Date().toISOString(),
             });
 
@@ -63,9 +85,12 @@ export default function ChatView() {
                 });
             }
         } catch {
+            clearTimeout(logTimer);
+            clearTimeout(logTimer2);
             addMessage({ id: `error-${Date.now()}`, role: "ai", content: "Something went wrong. Please try again.", has_interactive: false, created_at: new Date().toISOString() });
         } finally {
             setIsLoading(false);
+            setStatusLog([]);
         }
     };
 
@@ -83,8 +108,8 @@ export default function ChatView() {
         }
     };
 
-    const extractText = (content: string) => content.replace(/<!-- INTERACTIVE_OUTPUT: .+? -->/g, "").trim();
-    const extractUrl = (content: string): string | null => { const m = content.match(/<!-- INTERACTIVE_OUTPUT: (.+?) -->/); return m ? m[1] : null; };
+    // Clean text — remove interactive markers
+    const extractText = (content: string) => content.replace(/<!-- INTERACTIVE_OUTPUT: .+? -->/g, "").replace(/<!-- HTML_CONTENT_START -->[\s\S]*?<!-- HTML_CONTENT_END -->/g, "").trim();
 
     // Empty state — no project
     if (!activeProject) {
@@ -224,15 +249,18 @@ export default function ChatView() {
 
                 <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
                     {messages.map((msg, idx) => {
-                        const url = msg.interactive_html_url || extractUrl(msg.content);
-                        const text = extractText(msg.content);
                         const isHuman = msg.role === "human";
+                        const hasHtml = !!msg.html_content;
+                        const hasUrl = !!msg.interactive_html_url;
+                        const text = extractText(msg.content);
 
                         return (
                             <motion.div key={msg.id}
                                 initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
                                 transition={{ delay: idx * 0.03 }}
                                 style={{ display: "flex", gap: "12px", justifyContent: isHuman ? "flex-end" : "flex-start" }}>
+
+                                {/* AI avatar */}
                                 {!isHuman && (
                                     <div style={{
                                         width: "32px", height: "32px", borderRadius: "var(--radius-sm)",
@@ -245,18 +273,59 @@ export default function ChatView() {
                                     </div>
                                 )}
 
-                                <div style={{ maxWidth: "680px" }}>
-                                    <div className={isHuman ? "message-human" : "message-ai"}
-                                        style={{
-                                            borderRadius: isHuman ? "var(--radius-lg) var(--radius-lg) 4px var(--radius-lg)" : "var(--radius-lg) var(--radius-lg) var(--radius-lg) 4px",
-                                            padding: "14px 18px", fontSize: "14px", lineHeight: 1.7,
-                                            whiteSpace: "pre-wrap",
-                                        }}>
-                                        {text}
-                                    </div>
-                                    {url && <div style={{ marginTop: "12px" }}><InteractiveOutput url={url} /></div>}
+                                <div style={{ maxWidth: hasHtml || hasUrl ? "800px" : "680px", flex: hasHtml || hasUrl ? 1 : undefined }}>
+                                    {/* Human message bubble */}
+                                    {isHuman && (
+                                        <div className="message-human"
+                                            style={{
+                                                borderRadius: "var(--radius-lg) var(--radius-lg) 4px var(--radius-lg)",
+                                                padding: "14px 18px", fontSize: "14px", lineHeight: 1.7,
+                                                whiteSpace: "pre-wrap",
+                                            }}>
+                                            {text}
+                                        </div>
+                                    )}
+
+                                    {/* AI message — HTML card or text fallback */}
+                                    {!isHuman && (
+                                        <>
+                                            {/* Show status log pills if available */}
+                                            {msg.status_log && msg.status_log.length > 0 && (
+                                                <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginBottom: "12px" }}>
+                                                    {msg.status_log.map((log, i) => (
+                                                        <span key={i} style={{
+                                                            fontSize: "11px", padding: "3px 10px", borderRadius: "99px",
+                                                            background: "rgba(99, 102, 241, 0.08)",
+                                                            border: "1px solid rgba(99, 102, 241, 0.15)",
+                                                            color: "var(--text-secondary)",
+                                                        }}>
+                                                            {log}
+                                                        </span>
+                                                    ))}
+                                                </div>
+                                            )}
+
+                                            {/* HTML Card output via InteractiveOutput */}
+                                            {hasHtml ? (
+                                                <InteractiveOutput htmlContent={msg.html_content} url={msg.interactive_html_url} />
+                                            ) : hasUrl ? (
+                                                <InteractiveOutput url={msg.interactive_html_url} />
+                                            ) : (
+                                                /* Text fallback when no HTML was generated */
+                                                <div className="message-ai"
+                                                    style={{
+                                                        borderRadius: "var(--radius-lg) var(--radius-lg) var(--radius-lg) 4px",
+                                                        padding: "14px 18px", fontSize: "14px", lineHeight: 1.7,
+                                                        whiteSpace: "pre-wrap",
+                                                    }}>
+                                                    {text || "Processing..."}
+                                                </div>
+                                            )}
+                                        </>
+                                    )}
                                 </div>
 
+                                {/* Human avatar */}
                                 {isHuman && (
                                     <div style={{
                                         width: "32px", height: "32px", borderRadius: "var(--radius-sm)",
@@ -276,6 +345,7 @@ export default function ChatView() {
                     })}
                 </div>
 
+                {/* Loading indicator with status logs */}
                 {isLoading && (
                     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
                         style={{ display: "flex", gap: "12px", marginTop: "20px" }}>
@@ -288,12 +358,41 @@ export default function ChatView() {
                                 <path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z" />
                             </svg>
                         </div>
-                        <div className="message-ai" style={{ borderRadius: "var(--radius-lg) var(--radius-lg) var(--radius-lg) 4px", padding: "14px 18px" }}>
-                            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                                <div className="animate-pulse-glow" style={{ width: "8px", height: "8px", borderRadius: "50%", background: "var(--accent)" }} />
-                                <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>
-                                    {useDeepResearch ? "Researching the web..." : "Thinking..."}
-                                </span>
+                        <div style={{ flex: 1 }}>
+                            <div className="message-ai" style={{
+                                borderRadius: "var(--radius-lg) var(--radius-lg) var(--radius-lg) 4px",
+                                padding: "16px 20px",
+                            }}>
+                                <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                                    {statusLog.map((log, i) => (
+                                        <motion.div key={i}
+                                            initial={{ opacity: 0, x: -8 }}
+                                            animate={{ opacity: 1, x: 0 }}
+                                            transition={{ delay: i * 0.1 }}
+                                            style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                                            {i === statusLog.length - 1 && (
+                                                <div className="animate-pulse-glow" style={{
+                                                    width: "6px", height: "6px", borderRadius: "50%",
+                                                    background: "var(--accent)", flexShrink: 0,
+                                                }} />
+                                            )}
+                                            <span style={{
+                                                fontSize: "13px",
+                                                color: i === statusLog.length - 1 ? "var(--text-primary)" : "var(--text-muted)",
+                                            }}>
+                                                {log}
+                                            </span>
+                                        </motion.div>
+                                    ))}
+                                    {statusLog.length === 0 && (
+                                        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                                            <div className="animate-pulse-glow" style={{ width: "6px", height: "6px", borderRadius: "50%", background: "var(--accent)" }} />
+                                            <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>
+                                                {useDeepResearch ? "Starting deep research..." : "Thinking..."}
+                                            </span>
+                                        </div>
+                                    )}
+                                </div>
                             </div>
                         </div>
                     </motion.div>

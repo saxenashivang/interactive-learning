@@ -1,85 +1,156 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { motion } from "framer-motion";
-import { Maximize2, Minimize2, ExternalLink, RotateCcw } from "lucide-react";
 
 interface InteractiveOutputProps {
-    url: string;
+    url?: string;
+    htmlContent?: string;
 }
 
-export default function InteractiveOutput({ url }: InteractiveOutputProps) {
+export default function InteractiveOutput({ url, htmlContent }: InteractiveOutputProps) {
     const [isExpanded, setIsExpanded] = useState(false);
     const [isLoaded, setIsLoaded] = useState(false);
+    const [iframeHeight, setIframeHeight] = useState(450);
     const iframeRef = useRef<HTMLIFrameElement>(null);
 
     const handleRefresh = () => {
         if (iframeRef.current) {
-            iframeRef.current.src = url;
+            if (htmlContent) {
+                iframeRef.current.srcdoc = htmlContent;
+            } else if (url) {
+                iframeRef.current.src = url;
+            }
+        }
+    };
+
+    // Auto-resize iframe based on content
+    useEffect(() => {
+        const handleMessage = (event: MessageEvent) => {
+            if (event.data?.type === "resize" && event.data?.height) {
+                setIframeHeight(Math.min(Math.max(event.data.height + 40, 300), 800));
+            }
+        };
+        window.addEventListener("message", handleMessage);
+        return () => window.removeEventListener("message", handleMessage);
+    }, []);
+
+    // Inject resize script into htmlContent
+    const enhancedHtml = htmlContent
+        ? htmlContent.replace(
+            "</body>",
+            `<script>
+                new ResizeObserver(() => {
+                    parent.postMessage({ type: 'resize', height: document.body.scrollHeight }, '*');
+                }).observe(document.body);
+                setTimeout(() => {
+                    parent.postMessage({ type: 'resize', height: document.body.scrollHeight }, '*');
+                }, 1000);
+              </script></body>`
+        )
+        : undefined;
+
+    const openInNewTab = () => {
+        if (htmlContent) {
+            const blob = new Blob([htmlContent], { type: "text/html" });
+            const blobUrl = URL.createObjectURL(blob);
+            window.open(blobUrl, "_blank");
+        } else if (url) {
+            window.open(url, "_blank");
         }
     };
 
     return (
         <motion.div
             layout
-            className={`interactive-frame relative ${isExpanded ? "fixed inset-4 z-50" : ""}`}
-            style={
-                isExpanded
-                    ? { background: "var(--bg-primary)" }
-                    : {}
-            }
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.4, ease: "easeOut" }}
+            className={`relative ${isExpanded ? "fixed inset-4 z-50" : ""}`}
+            style={{
+                borderRadius: isExpanded ? "16px" : "16px",
+                overflow: "hidden",
+                border: "1px solid rgba(99, 102, 241, 0.25)",
+                boxShadow: "0 8px 32px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(99, 102, 241, 0.1)",
+                background: isExpanded ? "var(--bg-primary)" : "transparent",
+            }}
         >
             {/* Toolbar */}
             <div
-                className="flex items-center justify-between px-3 py-2"
                 style={{
-                    background: "var(--bg-tertiary)",
-                    borderBottom: "1px solid var(--border-subtle)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    padding: "8px 14px",
+                    background: "rgba(15, 23, 42, 0.95)",
+                    borderBottom: "1px solid rgba(99, 102, 241, 0.15)",
                 }}
             >
-                <div className="flex items-center gap-2">
-                    <div className="flex gap-1">
-                        <div className="w-2.5 h-2.5 rounded-full" style={{ background: "#ef4444" }} />
-                        <div className="w-2.5 h-2.5 rounded-full" style={{ background: "#eab308" }} />
-                        <div className="w-2.5 h-2.5 rounded-full" style={{ background: "#22c55e" }} />
+                <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                    <div style={{ display: "flex", gap: "6px" }}>
+                        <div style={{ width: "10px", height: "10px", borderRadius: "50%", background: "#ef4444" }} />
+                        <div style={{ width: "10px", height: "10px", borderRadius: "50%", background: "#eab308" }} />
+                        <div style={{ width: "10px", height: "10px", borderRadius: "50%", background: "#22c55e" }} />
                     </div>
-                    <span className="text-[10px] font-medium" style={{ color: "var(--text-muted)" }}>
+                    <span style={{ fontSize: "11px", fontWeight: 500, color: "rgba(148, 163, 184, 0.8)", letterSpacing: "0.5px" }}>
                         Interactive Output
                     </span>
                     {!isLoaded && (
-                        <span className="animate-shimmer text-[10px] px-2 py-0.5 rounded" style={{ color: "var(--accent-primary)" }}>
+                        <span style={{
+                            fontSize: "11px",
+                            color: "#818cf8",
+                            animation: "pulse 1.5s ease-in-out infinite",
+                        }}>
                             Loading...
                         </span>
                     )}
                 </div>
 
-                <div className="flex items-center gap-1">
+                <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
                     <button
                         onClick={handleRefresh}
-                        className="btn-ghost p-1 rounded"
                         title="Refresh"
+                        style={{
+                            background: "none",
+                            border: "none",
+                            color: "rgba(148, 163, 184, 0.7)",
+                            cursor: "pointer",
+                            padding: "4px",
+                            borderRadius: "6px",
+                            fontSize: "14px",
+                        }}
                     >
-                        <RotateCcw className="w-3.5 h-3.5" />
+                        ↻
                     </button>
-                    <a
-                        href={url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="btn-ghost p-1 rounded"
+                    <button
+                        onClick={openInNewTab}
                         title="Open in new tab"
+                        style={{
+                            background: "none",
+                            border: "none",
+                            color: "rgba(148, 163, 184, 0.7)",
+                            cursor: "pointer",
+                            padding: "4px",
+                            borderRadius: "6px",
+                            fontSize: "14px",
+                        }}
                     >
-                        <ExternalLink className="w-3.5 h-3.5" />
-                    </a>
+                        ↗
+                    </button>
                     <button
                         onClick={() => setIsExpanded(!isExpanded)}
-                        className="btn-ghost p-1 rounded"
                         title={isExpanded ? "Minimize" : "Maximize"}
+                        style={{
+                            background: "none",
+                            border: "none",
+                            color: "rgba(148, 163, 184, 0.7)",
+                            cursor: "pointer",
+                            padding: "4px",
+                            borderRadius: "6px",
+                            fontSize: "14px",
+                        }}
                     >
-                        {isExpanded ? (
-                            <Minimize2 className="w-3.5 h-3.5" />
-                        ) : (
-                            <Maximize2 className="w-3.5 h-3.5" />
-                        )}
+                        {isExpanded ? "⊖" : "⊕"}
                     </button>
                 </div>
             </div>
@@ -87,23 +158,30 @@ export default function InteractiveOutput({ url }: InteractiveOutputProps) {
             {/* Iframe */}
             <iframe
                 ref={iframeRef}
-                src={url}
+                srcDoc={enhancedHtml}
+                src={!htmlContent ? url : undefined}
                 onLoad={() => setIsLoaded(true)}
-                className="w-full border-none"
                 style={{
-                    height: isExpanded ? "calc(100% - 40px)" : "400px",
-                    borderRadius: "0 0 12px 12px",
+                    width: "100%",
+                    height: isExpanded ? "calc(100vh - 80px)" : `${iframeHeight}px`,
+                    border: "none",
                     background: "#0f172a",
+                    display: "block",
                 }}
-                sandbox="allow-scripts allow-same-origin"
+                sandbox="allow-scripts allow-same-origin allow-popups"
                 title="Interactive Learning Output"
             />
 
             {/* Expanded backdrop */}
             {isExpanded && (
                 <div
-                    className="fixed inset-0 -z-10"
-                    style={{ background: "rgba(0, 0, 0, 0.8)" }}
+                    style={{
+                        position: "fixed",
+                        inset: 0,
+                        zIndex: -1,
+                        background: "rgba(0, 0, 0, 0.85)",
+                        backdropFilter: "blur(8px)",
+                    }}
                     onClick={() => setIsExpanded(false)}
                 />
             )}

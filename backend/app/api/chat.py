@@ -103,6 +103,8 @@ async def send_message(
     # Choose agent and run
     ai_content = ""
     interactive_url = None
+    html_content = None
+    status_log = []
 
     try:
         if req.use_deep_research:
@@ -130,6 +132,7 @@ async def send_message(
                 "interactive_html_url": None,
                 "should_generate_interactive": False,
                 "uploaded_file_ids": [],
+                "status_log": [],
             }
             result_state = await chat_agent.ainvoke(state)
 
@@ -139,18 +142,36 @@ async def send_message(
             ai_content = last_msg.content if hasattr(last_msg, "content") else str(last_msg)
 
         interactive_url = result_state.get("interactive_html_url") or result_state.get("report_html_url")
+        status_log = result_state.get("status_log", [])
+
+        # Extract inline HTML if present
+        if "<!-- HTML_CONTENT_START -->" in ai_content:
+            html_start = ai_content.index("<!-- HTML_CONTENT_START -->") + len("<!-- HTML_CONTENT_START -->")
+            html_end = ai_content.index("<!-- HTML_CONTENT_END -->")
+            html_content = ai_content[html_start:html_end].strip()
+        
+        # Clean the stored content (remove inline HTML for DB storage)
+        if "<!-- HTML_CONTENT_START -->" in ai_content:
+            ai_content_clean = ai_content[:ai_content.index("<!-- HTML_CONTENT_START -->")].strip()
+        else:
+            ai_content_clean = ai_content
+        
+        print(f"📊 Status log: {status_log}")
+        print(f"📄 HTML content present: {html_content is not None}")
+        print(f"🔗 Interactive URL: {interactive_url}")
 
     except Exception as e:
         import traceback
         traceback.print_exc()
-        ai_content = f"I encountered an error while processing your request: {str(e)}"
+        ai_content_clean = f"I encountered an error while processing your request: {str(e)}"
+        status_log.append(f"❌ Error: {str(e)}")
 
     # Save AI message
     ai_msg = Message(
         conversation_id=conversation.id,
         role=MessageRole.AI,
-        content=ai_content,
-        has_interactive=interactive_url is not None,
+        content=ai_content_clean,
+        has_interactive=html_content is not None or interactive_url is not None,
         interactive_html_url=interactive_url,
     )
     db.add(ai_msg)
@@ -159,9 +180,11 @@ async def send_message(
     return {
         "conversation_id": str(conversation.id),
         "message_id": str(ai_msg.id),
-        "content": ai_content,
-        "has_interactive": interactive_url is not None,
+        "content": ai_content_clean,
+        "has_interactive": html_content is not None or interactive_url is not None,
         "interactive_html_url": interactive_url,
+        "html_content": html_content,
+        "status_log": status_log,
     }
 
 

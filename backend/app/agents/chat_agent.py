@@ -1,113 +1,84 @@
-"""Main Chat Agent using LangGraph with multi-provider LLM support.
+from __future__ import annotations
+"""Chat agent using LangGraph — always produces HTML card output."""
 
-This agent handles:
-1. Regular conversational responses
-2. Deciding when to generate interactive HTML output
-3. Integrating with RAG for context-aware responses
-4. Routing to deep research agent for paid users
-"""
+from typing import TypedDict, Optional, List, Literal
 
-from typing import Annotated, TypedDict, Literal, Optional, List
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
-from langgraph.graph import StateGraph, END, START
-from langgraph.graph.message import add_messages
+from langgraph.graph import StateGraph, START, END
 
 from app.agents.llm_provider import get_chat_model
 from app.agents.html_generator import generate_interactive_html
 from app.storage.s3 import storage_service
 
 
-# ---------- State ----------
-
 class ChatState(TypedDict):
-    """State for the chat agent graph."""
-    messages: Annotated[list, add_messages]
+    messages: list
     user_id: str
     project_id: str
     conversation_id: str
     provider: str
     plan_tier: str
-    context_chunks: List[str]  # RAG context
+    context_chunks: List[str]
     interactive_html_url: Optional[str]
     should_generate_interactive: bool
     uploaded_file_ids: List[str]
+    status_log: List[str]
 
 
-# ---------- System Prompt ----------
+SYSTEM_PROMPT = """You are LearnFlow, an interactive AI learning assistant.
 
-SYSTEM_PROMPT = """You are an intelligent learning assistant that creates interactive, visual explanations.
+IMPORTANT: You MUST respond using the ```interactive format. NEVER use plain markdown. Every response must be a React component.
 
-## Your Capabilities:
-- Explain concepts with rich visual diagrams, flowcharts, and interactive components
-- Generate code examples with syntax highlighting
-- Create interactive maps, charts, and data visualizations
-- Help users understand documents they upload (PDFs, images)
+Write a React component that renders inside `<div id="root">`. Keep the code CONCISE (under 100 lines).
 
-## Output Format Rules:
-When a concept would benefit from visual/interactive explanation, respond with TWO parts:
+Available CDN libraries: React 18, Mermaid.js, Chart.js, Leaflet.js, Tailwind CSS (with custom dark theme).
 
-1. **Text explanation** — A brief, clear explanation in markdown
-2. **Interactive component** — Wrap your React/JSX code in ```interactive tags
-
-For the interactive code block, write a React component that renders inside a `<div id="root">`.
-Available libraries (loaded via CDN): React 18, Mermaid.js, Leaflet.js, Chart.js, Tailwind CSS.
-
-Example interactive block:
+Format:
 ```interactive
 const App = () => {
     return (
-        <div className="glass p-6 animate-fade-in">
+        <div className="glass p-6 animate-fade-in max-w-4xl mx-auto">
             <h1 className="text-2xl font-bold gradient-text mb-4">Title</h1>
+            <p className="text-surface-200 leading-relaxed mb-4">Explanation...</p>
+            {/* Use Mermaid for diagrams - PREFERRED over custom SVG */}
             <div className="mermaid">
                 graph TD
-                    A[Start] --> B[End]
+                    A[Start] --> B[Process] --> C[End]
             </div>
         </div>
     );
 };
-
 ReactDOM.createRoot(document.getElementById('root')).render(<App />);
 ```
 
-## CSS Classes Available:
-- `.glass` — Glassmorphism card effect
-- `.gradient-text` — Primary gradient text
-- `.animate-fade-in` — Fade-in animation
+CSS classes: `.glass` (card), `.gradient-text` (purple gradient), `.animate-fade-in`
 
-## Guidelines:
-- Always prefer interactive output when explaining: algorithms, data structures, network protocols, system architecture, geography, data visualizations, workflows, state machines
-- For simple Q&A, just respond in text
-- Be concise in text, let the visuals do the heavy lifting
-- When RAG context is provided, use it to give accurate, document-grounded answers
+Rules:
+- ALWAYS use Mermaid.js for flowcharts, trees, sequences — NOT custom SVG
+- Use Chart.js for data charts — NOT custom canvas drawing
+- Keep explanations concise — 2-3 paragraphs max, let visuals speak
+- Use emoji in headings for visual flair
+- Use Tailwind classes for layout (grid, flex, gap, p-, m-, text-, bg-)
+- Dark theme: use bg-surface-800, bg-surface-900, text-surface-200, border-primary-500/20
+- NEVER exceed 100 lines of JSX code — be concise!
 """
 
 
 # ---------- Nodes ----------
 
 async def route_message(state: ChatState) -> ChatState:
-    """Analyze the message and decide the response strategy."""
-    llm = get_chat_model(provider=state.get("provider", "gemini"), temperature=0.1)
-
-    routing_prompt = """Analyze this user message and decide the response type.
-    
-Reply with EXACTLY one word:
-- "interactive" — if the topic benefits from visual/interactive explanation (diagrams, maps, charts, flows)
-- "text" — if a simple text response is sufficient
-- "research" — if the user is asking for deep research/analysis
-
-User message: {message}"""
-
-    last_msg = state["messages"][-1].content if state["messages"] else ""
-    result = await llm.ainvoke([HumanMessage(content=routing_prompt.format(message=last_msg))])
-    response_text = result.content.strip().lower()
-
-    should_interactive = "interactive" in response_text
-    return {**state, "should_generate_interactive": should_interactive}
+    """Analyze the message (currently just passes through)."""
+    log = list(state.get("status_log", []))
+    log.append("🔍 Analyzing your question...")
+    return {**state, "status_log": log, "should_generate_interactive": True}
 
 
 async def generate_response(state: ChatState) -> ChatState:
-    """Generate the main AI response."""
-    llm = get_chat_model(provider=state.get("provider", "gemini"))
+    """Generate the AI response — always as interactive HTML."""
+    log = list(state.get("status_log", []))
+    log.append("🧠 Generating response with interactive visuals...")
+
+    llm = get_chat_model(provider=state.get("provider", "anthropic"))
 
     system_msg = SystemMessage(content=SYSTEM_PROMPT)
     messages = [system_msg]
@@ -121,47 +92,65 @@ async def generate_response(state: ChatState) -> ChatState:
 
     messages.extend(state["messages"])
     response = await llm.ainvoke(messages)
-
-    return {**state, "messages": [response]}
+    
+    log.append("✅ Response generated")
+    return {**state, "messages": [response], "status_log": log}
 
 
 async def extract_and_store_interactive(state: ChatState) -> ChatState:
-    """Extract interactive code blocks and store as HTML artifacts."""
+    """Extract interactive HTML code and store as artifact."""
+    log = list(state.get("status_log", []))
     last_msg = state["messages"][-1]
     content = last_msg.content if hasattr(last_msg, "content") else str(last_msg)
 
     # Check for interactive code blocks
     if "```interactive" not in content:
-        return state
+        log.append("⚠️ LLM did not produce interactive HTML — returning raw text")
+        return {**state, "status_log": log}
+
+    log.append("📦 Extracting interactive HTML card...")
 
     # Extract interactive code
     parts = content.split("```interactive")
     if len(parts) < 2:
-        return state
+        log.append("⚠️ Failed to parse interactive block")
+        return {**state, "status_log": log}
 
     code_block = parts[1].split("```")[0].strip()
     text_part = parts[0].strip()
 
-    # Generate HTML artifact
+    # Generate full HTML
     title = "Interactive Learning Output"
     html_content = generate_interactive_html(title=title, react_code=code_block)
 
-    # Store in S3
-    artifact_url = storage_service.upload_html_artifact(html_content)
+    log.append("☁️ Uploading HTML artifact to storage...")
 
-    # Update the message to include the artifact URL
-    updated_content = f"{text_part}\n\n<!-- INTERACTIVE_OUTPUT: {artifact_url} -->"
+    try:
+        # Store in S3/MinIO
+        artifact_url = storage_service.upload_html_artifact(html_content)
+        log.append(f"✅ HTML card ready: {artifact_url}")
+    except Exception as e:
+        log.append(f"⚠️ S3 upload failed ({e}), using inline HTML")
+        artifact_url = None
+
+    # Build updated content with both text and inline HTML
+    if text_part:
+        updated_content = f"{text_part}\n\n<!-- INTERACTIVE_OUTPUT: {artifact_url or 'inline'} -->\n<!-- HTML_CONTENT_START -->\n{html_content}\n<!-- HTML_CONTENT_END -->"
+    else:
+        updated_content = f"<!-- INTERACTIVE_OUTPUT: {artifact_url or 'inline'} -->\n<!-- HTML_CONTENT_START -->\n{html_content}\n<!-- HTML_CONTENT_END -->"
+
     updated_msg = AIMessage(content=updated_content)
 
     return {
         **state,
         "messages": [updated_msg],
         "interactive_html_url": artifact_url,
+        "status_log": log,
     }
 
 
 def should_extract_interactive(state: ChatState) -> Literal["extract", "done"]:
-    """Decide whether to extract interactive content."""
+    """Always try to extract interactive content."""
     last_msg = state["messages"][-1] if state["messages"] else None
     if last_msg and hasattr(last_msg, "content") and "```interactive" in last_msg.content:
         return "extract"

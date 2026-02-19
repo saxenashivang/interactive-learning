@@ -24,6 +24,8 @@ interface Message {
     content: string;
     has_interactive: boolean;
     interactive_html_url?: string;
+    html_content?: string;
+    status_log?: string[];
     created_at: string;
 }
 
